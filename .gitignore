@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.py[oc]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+wheels/
+
+# Model / training / local data
+*.pt
+server/artifacts/
+server/events.jsonl
+
+# Dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# OS / editor
+.DS_Store
