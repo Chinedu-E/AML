@@ -51,7 +51,7 @@ uv run aml-serve \
   --replay artifacts/ibm_hi_small_demo.jsonl
 ```
 
-`--source` is the source that is live when the process starts. `--replay` registers the JSONL the dashboard can switch to.
+`--source` is the source that is live when the process starts. If `artifacts/ibm_hi_small_demo.jsonl` is present, `aml-serve` registers it for the UI Replay switcher automatically (override with `--replay PATH`, or disable with `--no-replay`).
 
 The producer **pauses when no dashboard clients are connected** (no scoring / no new txs) and resumes on the next WebSocket connect.
 
@@ -216,7 +216,8 @@ uv run aml-serve [OPTIONS]
 | `--crypto N` | `150` | Simulator crypto population |
 | `--cross-border N` | `60` | Simulator cross-border population |
 | `--source {sim,replay}` | `sim` | Source that is live when the process starts |
-| `--replay PATH` | _(none)_ | JSONL from `aml-sim --jsonl` or `aml-ibm-convert`. Required with `--source replay`. Also registers Replay so the dashboard can switch to it |
+| `--replay PATH` | auto demo if present | JSONL from `aml-sim --jsonl` or `aml-ibm-convert`. Defaults to `artifacts/ibm_hi_small_demo.jsonl` when that file exists. Required with `--source replay` if no demo is shipped |
+| `--no-replay` | off | Do not register Replay (simulator only) |
 
 Examples:
 

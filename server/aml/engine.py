@@ -375,6 +375,8 @@ class RealtimeEngine:
         self.warmup_done = 0
         self.live_events = 0
         self._warmup_by_source: dict[str, int] = {}
+        # Bumped on every successful ``set_source`` so in-flight scores can be dropped.
+        self.source_epoch = 0
 
     @property
     def store(self) -> GraphStore:
@@ -437,6 +439,7 @@ class RealtimeEngine:
         self.live_events = 0
         self._batch_id = 0
         self._alert_seq = 0
+        self.source_epoch += 1
         return True
 
     def next_transaction(self) -> Transaction:

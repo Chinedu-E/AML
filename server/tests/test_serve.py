@@ -258,10 +258,29 @@ def test_handler_replays_alerts_and_dispositions() -> None:
 def test_serve_replay_requires_path(capsys) -> None:
     from aml.serve import run
 
-    code = run(["--source", "replay"])
+    # --no-replay disables the shipped demo auto-load.
+    code = run(["--source", "replay", "--no-replay"])
     assert code == 1
     err = capsys.readouterr().err
     assert "requires --replay" in err
+
+
+def test_resolve_replay_path_auto_demo(tmp_path: Path, monkeypatch) -> None:
+    from aml import serve as serve_mod
+    from aml.serve import build_parser, resolve_replay_path
+
+    demo = tmp_path / "ibm_hi_small_demo.jsonl"
+    demo.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(serve_mod, "DEMO_REPLAY_PATH", demo)
+
+    auto = build_parser().parse_args([])
+    assert resolve_replay_path(auto) == demo
+
+    explicit = build_parser().parse_args(["--replay", str(tmp_path / "other.jsonl")])
+    assert resolve_replay_path(explicit) == tmp_path / "other.jsonl"
+
+    disabled = build_parser().parse_args(["--no-replay"])
+    assert resolve_replay_path(disabled) is None
 
 
 def _write_mini_jsonl(path: Path, n: int = 40) -> None:
@@ -453,6 +472,7 @@ def test_producer_pauses_without_clients(tiny_checkpoint: Path) -> None:
             self._real = real
             self.pulls = 0
             self.config = real.config
+            self.source_epoch = real.source_epoch
 
         def next_transaction(self):  # noqa: ANN201
             self.pulls += 1

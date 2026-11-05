@@ -229,6 +229,10 @@ async def producer_loop(
             batch_started = asyncio.get_event_loop().time()
             continue
 
+        to_score: list[Transaction] | None = None
+        score_epoch = engine.source_epoch
+        sleep_for = 0.0
+
         async with tick_lock:
             # Client may have disconnected while we waited for the lock.
             if hub.client_count == 0:
@@ -247,33 +251,43 @@ async def producer_loop(
                 batch and (now - batch_started) >= cfg.max_batch_wait
             )
             if flush:
-                scored = await asyncio.to_thread(engine.score_batch, list(batch))
-                scores_msg = {
-                    "type": "scores",
-                    "batch_id": scored.batch_id,
-                    "infer_ms": round(scored.infer_ms, 2),
-                    "transfer_scores": scored.transfer_scores,
-                    "party_scores": scored.party_scores,
-                }
-                await hub.broadcast(scores_msg)
-                for alert in scored.alerts:
-                    payload = {"type": "alert", **alert.to_dict()}
-                    await hub.note_alert(payload)
-                    await hub.broadcast(
-                        payload,
-                        network=alert.network if alert.network in ALL_NETWORKS else None,
-                    )
-                print(
-                    f"batch {scored.batch_id:04d}  events={len(batch)}  "
-                    f"infer_ms={scored.infer_ms:.1f}  alerts={len(scored.alerts)}  "
-                    f"{_format_metrics(scored.label_metrics)}",
-                    flush=True,
-                )
+                # Score outside the lock so a source switch is not blocked for
+                # the full forward pass (can be seconds on a large graph).
+                to_score = list(batch)
+                score_epoch = engine.source_epoch
                 batch.clear()
                 batch_started = asyncio.get_event_loop().time()
 
             elapsed = asyncio.get_event_loop().time() - t_start
             sleep_for = interval - elapsed
+
+        if to_score is not None:
+            scored = await asyncio.to_thread(engine.score_batch, to_score)
+            if engine.source_epoch != score_epoch:
+                # Source switched while we were scoring; drop stale output.
+                continue
+            scores_msg = {
+                "type": "scores",
+                "batch_id": scored.batch_id,
+                "infer_ms": round(scored.infer_ms, 2),
+                "transfer_scores": scored.transfer_scores,
+                "party_scores": scored.party_scores,
+            }
+            await hub.broadcast(scores_msg)
+            for alert in scored.alerts:
+                payload = {"type": "alert", **alert.to_dict()}
+                await hub.note_alert(payload)
+                await hub.broadcast(
+                    payload,
+                    network=alert.network if alert.network in ALL_NETWORKS else None,
+                )
+            print(
+                f"batch {scored.batch_id:04d}  events={len(to_score)}  "
+                f"infer_ms={scored.infer_ms:.1f}  alerts={len(scored.alerts)}  "
+                f"{_format_metrics(scored.label_metrics)}",
+                flush=True,
+            )
+
         if sleep_for > 0:
             await asyncio.sleep(sleep_for)
 
@@ -451,15 +465,39 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "JSONL path from aml-sim --jsonl or aml-ibm-convert. "
-            "Required with --source replay; also registers Replay for the UI switcher"
+            "Required with --source replay. When omitted, auto-loads "
+            "artifacts/ibm_hi_small_demo.jsonl if that file exists"
         ),
+    )
+    p.add_argument(
+        "--no-replay",
+        action="store_true",
+        help="Do not register a Replay source (simulator only)",
     )
     return p
 
 
+DEMO_REPLAY_PATH = Path("artifacts/ibm_hi_small_demo.jsonl")
+
+
+def resolve_replay_path(args: argparse.Namespace) -> Path | None:
+    """Pick the JSONL to register for the UI source switcher."""
+    if getattr(args, "no_replay", False):
+        return None
+    if args.replay is not None:
+        return args.replay
+    if DEMO_REPLAY_PATH.is_file():
+        return DEMO_REPLAY_PATH
+    return None
+
+
 def build_engine_from_args(args: argparse.Namespace) -> RealtimeEngine:
-    if args.source == "replay" and args.replay is None:
-        raise ValueError("--source replay requires --replay PATH")
+    replay_path = resolve_replay_path(args)
+    if args.source == "replay" and replay_path is None:
+        raise ValueError(
+            "--source replay requires --replay PATH "
+            "(or ship artifacts/ibm_hi_small_demo.jsonl)"
+        )
 
     config = EngineConfig(
         seed=args.seed,
@@ -490,9 +528,9 @@ def build_engine_from_args(args: argparse.Namespace) -> RealtimeEngine:
         )
     )
     sources: dict[str, TransactionSource] = {"sim": sim_source}
-    if args.replay is not None:
+    if replay_path is not None:
         sources["replay"] = build_replay_source(
-            args.replay, max_transfer_edges=config.max_transfer_edges
+            replay_path, max_transfer_edges=config.max_transfer_edges
         )
 
     if args.source not in sources:
