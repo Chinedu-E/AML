@@ -443,3 +443,94 @@ def test_source_switch_clears_hub_and_updates_hello(
                 pass
 
     asyncio.run(_run())
+
+
+def test_producer_pauses_without_clients(tiny_checkpoint: Path) -> None:
+    """No scoring while the hub is empty; production resumes after register."""
+
+    class CountingEngine:
+        def __init__(self, real: RealtimeEngine) -> None:
+            self._real = real
+            self.pulls = 0
+            self.config = real.config
+
+        def next_transaction(self):  # noqa: ANN201
+            self.pulls += 1
+            return self._real.next_transaction()
+
+        def score_batch(self, txs):  # noqa: ANN001, ANN201
+            return self._real.score_batch(txs)
+
+        def tx_wire_dict(self, tx, *, transfer_risk=None):  # noqa: ANN001, ANN201
+            return self._real.tx_wire_dict(tx, transfer_risk=transfer_risk)
+
+    async def _run() -> None:
+        cfg = EngineConfig(
+            seed=3,
+            rate_per_second=50.0,
+            batch_size=2,
+            max_batch_wait=0.2,
+            warmup=10,
+            threshold=0.5,
+            population=_small_pop(),
+            checkpoint=tiny_checkpoint,
+            device="cpu",
+        )
+        real = RealtimeEngine(cfg)
+        real.warmup(10)
+        engine = CountingEngine(real)
+        hub = Hub()
+        tick_lock = asyncio.Lock()
+        batch: list = []
+        producer = asyncio.create_task(
+            producer_loop(engine, hub, tick_lock=tick_lock, batch=batch)
+        )
+        try:
+            await asyncio.sleep(0.15)
+            assert engine.pulls == 0
+            assert hub.client_count == 0
+
+            class DummyWS:
+                pass
+
+            client = DummyWS()
+            await hub.register(client)
+            deadline = asyncio.get_running_loop().time() + 3.0
+            while engine.pulls == 0 and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+            assert engine.pulls >= 1
+
+            await hub.unregister(client)
+            assert hub.client_count == 0
+            pulls_at_idle = engine.pulls
+            await asyncio.sleep(0.2)
+            assert engine.pulls == pulls_at_idle
+        finally:
+            producer.cancel()
+            try:
+                await producer
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(_run())
+
+
+def test_health_request_returns_ok() -> None:
+    from aml.serve import health_request
+
+    class Conn:
+        def respond(self, status: int, text: str):
+            return {"status": status, "text": text}
+
+    class Req:
+        def __init__(self, path: str) -> None:
+            self.path = path
+
+    async def _run() -> None:
+        ok = await health_request(Conn(), Req("/health"))
+        assert ok == {"status": 200, "text": "ok\n"}
+        root = await health_request(Conn(), Req("/"))
+        assert root == {"status": 200, "text": "ok\n"}
+        assert await health_request(Conn(), Req("/ws")) is None
+
+    asyncio.run(_run())

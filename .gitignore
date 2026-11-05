@@ -8,9 +8,14 @@ build/
 dist/
 wheels/
 
-# Model / training / local data
+# Local / bulky artifacts (shipped demo files are allow-listed below)
 *.pt
-server/artifacts/
+!server/artifacts/hetero_sage.pt
+!server/artifacts/hetero_sage_tiny.pt
+server/artifacts/*
+!server/artifacts/hetero_sage.pt
+!server/artifacts/hetero_sage_tiny.pt
+!server/artifacts/ibm_hi_small_demo.jsonl
 server/events.jsonl
 
 # Dashboard

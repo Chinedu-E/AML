@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+tests/
+artifacts/ibm_hi_small.jsonl
+artifacts/training_report.md
+artifacts/training_report.json
+artifacts/hetero_sage_tiny.pt
+events.jsonl
+*.egg-info/
+.python-version

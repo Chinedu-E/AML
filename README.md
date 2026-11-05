@@ -41,17 +41,19 @@ npm run dev
 
 Open http://127.0.0.1:5173. The dashboard connects to `ws://127.0.0.1:8765` (override with `VITE_AML_WS`).
 
-To start on the simulator and let the UI switch to a replay file:
+To start on the simulator and let the UI switch to the shipped demo replay:
 
 ```bash
 cd server
 uv run aml-serve \
   --checkpoint artifacts/hetero_sage.pt \
   --source sim \
-  --replay artifacts/ibm_hi_small.jsonl
+  --replay artifacts/ibm_hi_small_demo.jsonl
 ```
 
 `--source` is the source that is live when the process starts. `--replay` registers the JSONL the dashboard can switch to.
+
+The producer **pauses when no dashboard clients are connected** (no scoring / no new txs) and resumes on the next WebSocket connect.
 
 ---
 
@@ -222,23 +224,23 @@ Examples:
 # Live simulator only
 uv run aml-serve --checkpoint artifacts/hetero_sage.pt
 
-# Start on simulator; UI can switch to replay
+# Start on simulator; UI can switch to the shipped demo replay
 uv run aml-serve \
   --checkpoint artifacts/hetero_sage.pt \
   --source sim \
-  --replay artifacts/ibm_hi_small.jsonl
+  --replay artifacts/ibm_hi_small_demo.jsonl
 
 # Start on replay
 uv run aml-serve \
   --checkpoint artifacts/hetero_sage.pt \
   --source replay \
-  --replay artifacts/ibm_hi_small.jsonl \
+  --replay artifacts/ibm_hi_small_demo.jsonl \
   --rate 2 \
   --warmup 200 \
   --reveal-labels
 ```
 
-Default URL: `ws://127.0.0.1:8765`.
+Default URL: `ws://127.0.0.1:8765`. With zero connected clients the producer stays idle.
 
 ### Tests (server)
 
@@ -263,3 +265,65 @@ From `dashboard/`:
 Optional env: `VITE_AML_WS` overrides the WebSocket URL (default `ws://127.0.0.1:8765`).
 
 In the UI, the **Source** switcher selects Simulator or Replay. Replay is available only when `aml-serve` was started with `--replay`. Switching clears the live feed, alerts, and graph, then continues from the chosen source’s warmed graph.
+
+---
+
+## Shipped artifacts
+
+These files are in git and copied into the server Docker image:
+
+| Path | Purpose |
+|------|---------|
+| `server/artifacts/hetero_sage.pt` | HeteroSAGE checkpoint (~600KB) |
+| `server/artifacts/ibm_hi_small_demo.jsonl` | First 5k IBM-style rows for Replay (~1MB) |
+
+The full `ibm_hi_small.jsonl` (~1GB) stays local/gitignored. Refresh the demo slice after regenerating IBM JSONL:
+
+```bash
+cd server
+head -n 5000 artifacts/ibm_hi_small.jsonl > artifacts/ibm_hi_small_demo.jsonl
+# or: uv run aml-ibm-convert --csv HI-Small_Trans.csv --out artifacts/ibm_hi_small_demo.jsonl --limit 5000
+```
+
+---
+
+## Deploy (Railway)
+
+Two services from the same repo. The server Dockerfile listens on `0.0.0.0` and uses Railway’s `PORT`. `GET /health` (and `/`) returns `200` for probes. Inference only runs while at least one WebSocket client is connected.
+
+### 1. Server service
+
+- Root directory: `server`
+- Builder: Dockerfile ([`server/Dockerfile`](server/Dockerfile))
+- No secrets required for artifacts (checkpoint + demo JSONL are in the image)
+- Optional vars: `HOST` (default `0.0.0.0` in the image), `PORT` (set by Railway)
+
+After deploy, note the public HTTPS URL (e.g. `https://aml-server-production.up.railway.app`). The dashboard must use the WebSocket form: `wss://aml-server-production.up.railway.app`.
+
+### 2. Dashboard service
+
+- Root directory: `dashboard`
+- Builder: Dockerfile ([`dashboard/Dockerfile`](dashboard/Dockerfile))
+- Build arg / variable: `VITE_AML_WS=wss://<your-server-host>` (no path; same host the server exposes)
+
+Example Railway build arg:
+
+```
+VITE_AML_WS=wss://aml-server-production.up.railway.app
+```
+
+Redeploy the dashboard whenever the server public hostname changes (Vite inlines `VITE_AML_WS` at build time).
+
+### Local Docker smoke check
+
+```bash
+# server
+cd server
+docker build -t aml-server .
+docker run --rm -p 8080:8080 -e PORT=8080 aml-server
+
+# dashboard (point at local server)
+cd ../dashboard
+docker build --build-arg VITE_AML_WS=ws://127.0.0.1:8080 -t aml-dashboard .
+docker run --rm -p 3000:3000 -e PORT=3000 aml-dashboard
+```

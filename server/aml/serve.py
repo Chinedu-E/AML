@@ -51,16 +51,28 @@ class Hub:
         self._alerts: deque[dict[str, Any]] = deque(maxlen=ALERT_RING)
         self._seen_alerts: set[str] = set()
         self._dispositions: dict[str, str] = {}
+        self._clients_nonempty = asyncio.Event()
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
+
+    async def wait_for_clients(self) -> None:
+        """Block until at least one client is connected."""
+        await self._clients_nonempty.wait()
 
     async def register(self, websocket: Any) -> ClientState:
         state = ClientState(websocket=websocket)
         async with self._lock:
             self._clients[websocket] = state
+            self._clients_nonempty.set()
         return state
 
     async def unregister(self, websocket: Any) -> None:
         async with self._lock:
             state = self._clients.pop(websocket, None)
+            if not self._clients:
+                self._clients_nonempty.clear()
         if state is None:
             return
         if state.writer_task is not None and not state.writer_task.done():
@@ -198,13 +210,30 @@ async def producer_loop(
 
     ``tick_lock`` is held while pulling/scoring/broadcasting and released
     during the pacing sleep so a source switch can run between ticks.
+    Production pauses when no clients are connected.
     """
     cfg = engine.config
     interval = 1.0 / max(cfg.rate_per_second, 1e-6)
     batch_started = asyncio.get_event_loop().time()
+    paused = False
 
     while True:
+        if hub.client_count == 0:
+            batch.clear()
+            if not paused:
+                print("producer paused (0 clients)", flush=True)
+                paused = True
+            await hub.wait_for_clients()
+            print("producer resumed", flush=True)
+            paused = False
+            batch_started = asyncio.get_event_loop().time()
+            continue
+
         async with tick_lock:
+            # Client may have disconnected while we waited for the lock.
+            if hub.client_count == 0:
+                batch.clear()
+                continue
             t_start = asyncio.get_event_loop().time()
             tx = await asyncio.to_thread(engine.next_transaction)
             wire = engine.tx_wire_dict(tx, transfer_risk=None)
@@ -319,6 +348,14 @@ async def handler(
         await hub.unregister(websocket)
 
 
+async def health_request(connection: Any, request: Any) -> Any:
+    """Answer Railway/HTTP probes without upgrading to WebSocket."""
+    path = getattr(request, "path", "") or ""
+    if path in ("/health", "/"):
+        return connection.respond(200, "ok\n")
+    return None
+
+
 async def run_server(engine: RealtimeEngine, host: str, port: int) -> None:
     try:
         from websockets.asyncio.server import serve
@@ -347,7 +384,9 @@ async def run_server(engine: RealtimeEngine, host: str, port: int) -> None:
         flush=True,
     )
     try:
-        async with serve(_handler, host, port):
+        async with serve(
+            _handler, host, port, process_request=health_request
+        ):
             await asyncio.Future()  # run forever
     finally:
         producer.cancel()
@@ -473,14 +512,36 @@ def build_engine_from_args(args: argparse.Namespace) -> RealtimeEngine:
     return engine
 
 
+def _resolve_host_port(args: argparse.Namespace) -> tuple[str, int]:
+    """Prefer Railway ``PORT`` / ``HOST`` when present.
+
+    When ``PORT`` is set (typical on Railway) and ``HOST`` is not, bind
+    ``0.0.0.0`` so the service is reachable outside the container.
+    """
+    import os
+
+    port_env = os.environ.get("PORT")
+    if port_env:
+        try:
+            port = int(port_env)
+        except ValueError as exc:
+            raise ValueError(f"invalid PORT={port_env!r}") from exc
+        host = os.environ.get("HOST") or "0.0.0.0"
+    else:
+        port = args.port
+        host = os.environ.get("HOST") or args.host
+    return host, port
+
+
 def run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         engine = build_engine_from_args(args)
+        host, port = _resolve_host_port(args)
     except (FileNotFoundError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    asyncio.run(run_server(engine, args.host, args.port))
+    asyncio.run(run_server(engine, host, port))
     return 0
 
 

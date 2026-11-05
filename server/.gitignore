@@ -9,6 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Training artifacts
-artifacts/
+# Local / bulky artifacts (shipped demo files are allow-listed)
+artifacts/*
+!artifacts/hetero_sage.pt
+!artifacts/hetero_sage_tiny.pt
+!artifacts/ibm_hi_small_demo.jsonl
 *.pt
+!artifacts/hetero_sage.pt
+!artifacts/hetero_sage_tiny.pt
