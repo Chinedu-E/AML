@@ -349,9 +349,13 @@ async def handler(
 
 
 async def health_request(connection: Any, request: Any) -> Any:
-    """Answer Railway/HTTP probes without upgrading to WebSocket."""
+    """Answer Railway/HTTP probes without blocking the WebSocket upgrade on ``/``.
+
+    Dashboards connect to ``wss://host/``. Returning a plain 200 for ``/``
+    would short-circuit that handshake, so only ``/health`` is intercepted.
+    """
     path = getattr(request, "path", "") or ""
-    if path in ("/health", "/"):
+    if path == "/health":
         return connection.respond(200, "ok\n")
     return None
 

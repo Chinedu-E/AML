@@ -289,7 +289,7 @@ head -n 5000 artifacts/ibm_hi_small.jsonl > artifacts/ibm_hi_small_demo.jsonl
 
 ## Deploy (Railway)
 
-Two services from the same repo. The server Dockerfile listens on `0.0.0.0` and uses Railway’s `PORT`. `GET /health` (and `/`) returns `200` for probes. Inference only runs while at least one WebSocket client is connected.
+Two services from the same repo. The server Dockerfile listens on `0.0.0.0` and uses Railway’s `PORT`. `GET /health` returns `200` for probes (`/` stays free for the WebSocket upgrade). Inference only runs while at least one WebSocket client is connected.
 
 ### 1. Server service
 

@@ -529,8 +529,8 @@ def test_health_request_returns_ok() -> None:
     async def _run() -> None:
         ok = await health_request(Conn(), Req("/health"))
         assert ok == {"status": 200, "text": "ok\n"}
-        root = await health_request(Conn(), Req("/"))
-        assert root == {"status": 200, "text": "ok\n"}
+        # Root must stay open for the WebSocket upgrade.
+        assert await health_request(Conn(), Req("/")) is None
         assert await health_request(Conn(), Req("/ws")) is None
 
     asyncio.run(_run())
